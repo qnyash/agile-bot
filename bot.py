@@ -662,7 +662,7 @@ async def process_mood(callback_query: types.CallbackQuery):
             pass
 
         # Optionally publish to channel a short message:
-        # await bot.send_message(CHANNEL_ID, f"Настроение @{callback_query.from_user.username}: {emo}")
+        await bot.send_message(CHANNEL_ID, f"Настроение @{callback_query.from_user.username}: {emo}")
     except Exception as e:
         print("process_mood error:", e)
         await callback_query.answer("Ошибка при сохранении настроения.")
@@ -731,3 +731,4 @@ async def on_startup(dp_):
 # ======================
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+
