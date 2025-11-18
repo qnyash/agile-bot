@@ -262,15 +262,33 @@ async def on_startup(dp_):
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
 
+# ======================
+# Фиктивный веб-сервер для Render
+# ======================
+import os
 import asyncio
 from aiohttp import web
 
 async def handler(request):
-    return web.Response(text="OK")
+    return web.Response(text="Bot is running!")
 
-app = web.Application()
-app.router.add_get("/", handler)
+async def run_web():
+    app = web.Application()
+    app.router.add_get("/", handler)
+    port = int(os.environ.get("PORT", 10000))  # Render автоматически задаёт PORT
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server started on port {port}")
 
-# запускаем сервер на произвольном порту
-port = int(os.environ.get("PORT", 10000))
-web.run_app(app, port=port)
+# запускаем polling и веб-сервер параллельно
+async def main():
+    await asyncio.gather(
+        executor.start_polling(dp, skip_updates=True, on_startup=on_startup),
+        run_web()
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
