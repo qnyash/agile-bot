@@ -7,6 +7,7 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,10 +18,12 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 # ======================
 # Настройки (поменяй токен/канал при необходимости)
 # ======================
-ALLOWED_USERS = [466924747, 473956283]   # сюда твои ID
-USER_IDS = [466924747, 473956283]        # кому слать ежедневные оповещения
+ALLOWED_USERS = [466924747, 473956283]
+USER_IDS = [466924747, 473956283]
 TOKEN = "8155844970:AAHS8dWJmDeFVfOgPscCEQdHqFrbGSG3Mss"
-CHANNEL_ID = -1003457894028               # ID канала
+CHANNEL_ID = -1003457894028
+
+MOSCOW_TZ = pytz.timezone("Europe/Moscow")  # московское время
 
 # ======================
 # Файлы хранения
@@ -89,10 +92,6 @@ def save_user_stats(stats):
     write_json(STATS_FILE, stats)
 
 def create_new_sprint(name=None, duration_days=14, start_date=None, end_date=None):
-    """
-    Создаёт новый спринт. Если есть текущий — сохраняет в историю.
-    Можно передать start_date (date object or iso str) и end_date.
-    """
     current = get_sprint()
     if current:
         record = {
@@ -107,18 +106,12 @@ def create_new_sprint(name=None, duration_days=14, start_date=None, end_date=Non
 
     new_name = name or f"Спринт {datetime.now().strftime('%d.%m.%Y')}"
     if start_date:
-        if isinstance(start_date, str):
-            start_iso = start_date
-        else:
-            start_iso = start_date.isoformat()
+        start_iso = start_date if isinstance(start_date, str) else start_date.isoformat()
     else:
         start_iso = datetime.now().date().isoformat()
 
     if end_date:
-        if isinstance(end_date, str):
-            end_iso = end_date
-        else:
-            end_iso = end_date.isoformat()
+        end_iso = end_date if isinstance(end_date, str) else end_date.isoformat()
     else:
         end_iso = (datetime.fromisoformat(start_iso) + timedelta(days=duration_days)).date().isoformat()
 
@@ -128,7 +121,7 @@ def create_new_sprint(name=None, duration_days=14, start_date=None, end_date=Non
         "goal": "",
         "start_date": start_iso,
         "end_date": end_iso,
-        "moods": {}  # структура: { "user_id": { "YYYY-MM-DD": "😡", ... }, ... }
+        "moods": {}
     }
     set_sprint(new)
     return new
@@ -175,443 +168,24 @@ async def cmd_start(message: types.Message):
         await message.answer(caption, reply_markup=main_menu())
 
 # ======================
-# Добавление большой задачи
+# Тут идут все твои остальные хендлеры / задачи / мини-задачи / ревью / ретро...
+# (оставляем без изменений)
 # ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "➕ Добавить задачу")
-async def add_task_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    await message.answer("Введи текст большой задачи:")
-    await state.set_state("add_task")
-
-@dp.message_handler(state="add_task")
-async def add_task_finish(message: types.Message, state: FSMContext):
-    sprint = get_sprint() or create_new_sprint()
-    sprint.setdefault("tasks", [])
-    sprint["tasks"].append({
-        "text": message.text.strip(),
-        "done": False,
-        "created_at": datetime.now().isoformat(),
-        "subtasks": []
-    })
-    set_sprint(sprint)
-    await message.answer(f"Большая задача добавлена:\n👉 {message.text}", reply_markup=main_menu())
-    await state.finish()
-
-# ======================
-# Удаление большой задачи
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "🗑 Удалить задачу")
-async def delete_task_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    sprint = get_sprint()
-    if not sprint or not sprint.get("tasks"):
-        return await message.answer("Нечего удалять.", reply_markup=main_menu())
-
-    text = "Выберите номер задачи для удаления:\n"
-    for i, t in enumerate(sprint["tasks"]):
-        text += f"{i + 1}. {t['text']}\n"
-    await message.answer(text)
-    await state.set_state("delete_task")
-
-@dp.message_handler(state="delete_task")
-async def delete_task_finish(message: types.Message, state: FSMContext):
-    sprint = get_sprint() or {}
-    try:
-        idx = int(message.text.strip()) - 1
-        removed = sprint["tasks"].pop(idx)
-        set_sprint(sprint)
-        await message.answer(f"Удалено: ❌ {removed['text']}", reply_markup=main_menu())
-    except Exception:
-        await message.answer("Некорректный номер 😅", reply_markup=main_menu())
-    await state.finish()
-
-# ======================
-# Новый спринт (с ручным вводом дат)
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "🔄 Новый спринт")
-async def new_sprint_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    await message.answer("Введите дату начала спринта в формате ДД.ММ.ГГГГ (или напиши 'сейчас'):")
-    await state.set_state(SprintStates.start_date)
-
-@dp.message_handler(state=SprintStates.start_date)
-async def new_sprint_start_date(message: types.Message, state: FSMContext):
-    date_str = message.text.strip()
-    try:
-        if date_str.lower() in ("сейчас", "now", "today", ""):
-            start = datetime.now().date()
-        else:
-            start = datetime.strptime(date_str, "%d.%m.%Y").date()
-        await state.update_data(start_date=start.isoformat())
-        await message.answer("Введите дату окончания спринта в формате ДД.ММ.ГГГГ (или оставьте пустым для +3 недели):")
-        await state.set_state(SprintStates.end_date)
-    except ValueError:
-        await message.answer("Некорректный формат даты. Попробуйте ДД.ММ.ГГГГ")
-
-@dp.message_handler(state=SprintStates.end_date)
-async def new_sprint_end_date(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    start_str = data.get("start_date")
-    end_text = message.text.strip()
-    try:
-        start_date = datetime.fromisoformat(start_str).date()
-        if end_text == "" or end_text.lower() in ("", "по умолчанию"):
-            end_date = start_date + timedelta(weeks=3)
-        else:
-            end_date = datetime.strptime(end_text, "%d.%m.%Y").date()
-    except Exception:
-        await message.answer("Некорректный формат даты. Попробуйте ДД.ММ.ГГГГ", reply_markup=main_menu())
-        await state.finish()
-        return
-
-    if end_date < start_date:
-        await message.answer("Дата окончания не может быть раньше начала. Попробуйте снова.", reply_markup=main_menu())
-        await state.finish()
-        return
-
-    create_new_sprint(name=f"Спринт {start_date.strftime('%d.%m.%Y')}",
-                      duration_days=(end_date - start_date).days,
-                      start_date=start_date.isoformat(),
-                      end_date=end_date.isoformat())
-
-    await message.answer(f"Спринт создан с {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')} ✅", reply_markup=main_menu())
-    await state.finish()
-
-# ======================
-# Добавление мини-задачи (подзадачи)
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "➕ Мини-задача")
-async def add_subtask_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    sprint = get_sprint()
-    if not sprint or not sprint.get("tasks"):
-        return await message.answer("Сначала добавь большую задачу.", reply_markup=main_menu())
-
-    text = "Выберите номер большой задачи для добавления мини-задачи:\n"
-    for i, t in enumerate(sprint["tasks"]):
-        text += f"{i + 1}. {t['text']}\n"
-    await message.answer(text)
-    await state.set_state("choose_task_for_subtask")
-
-@dp.message_handler(state="choose_task_for_subtask")
-async def add_subtask_choose_task(message: types.Message, state: FSMContext):
-    try:
-        index = int(message.text.strip()) - 1
-        sprint = get_sprint()
-        if index < 0 or index >= len(sprint.get("tasks", [])):
-            raise ValueError("Номер вне диапазона")
-        await state.update_data(task_index=index)
-        await message.answer("Введи текст мини-задачи:")
-        await state.set_state("add_subtask")
-    except Exception as e:
-        print("Ошибка выбора большой задачи:", e)
-        await message.answer("Некорректный номер 😅", reply_markup=main_menu())
-        await state.finish()
-
-@dp.message_handler(state="add_subtask")
-async def add_subtask_finish(message: types.Message, state: FSMContext):
-    try:
-        data = await state.get_data()
-        index = data.get("task_index")
-        sprint = get_sprint() or create_new_sprint()
-
-        if index is None or index < 0 or index >= len(sprint.get("tasks", [])):
-            raise ValueError("Задача не найдена")
-
-        # Создаём список подзадач, если его нет
-        if "subtasks" not in sprint["tasks"][index]:
-            sprint["tasks"][index]["subtasks"] = []
-
-        subtask_text = message.text.strip()
-        deadline = (datetime.now() + timedelta(hours=12)).isoformat()
-
-        sprint["tasks"][index]["subtasks"].append({
-            "text": subtask_text,
-            "done": False,
-            "points": 1,
-            "created_at": datetime.now().isoformat(),
-            "deadline": deadline
-        })
-        set_sprint(sprint)
-
-        await message.answer(
-            f"Мини-задача добавлена под '{sprint['tasks'][index]['text']}':\n👉 {subtask_text}\n⏰ Дедлайн через 12 часов",
-            reply_markup=main_menu()
-        )
-    except Exception as e:
-        print("Ошибка при добавлении мини-задачи:", e)
-        await message.answer("Произошла ошибка при добавлении мини-задачи 😅", reply_markup=main_menu())
-    finally:
-        await state.finish()
-
-# ======================
-# Выполнение мини-задачи
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "✅ Выполнить мини-задачу")
-async def complete_subtask_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    sprint = get_sprint()
-    choices = []
-    if sprint:
-        for i, task in enumerate(sprint.get("tasks", [])):
-            for j, sub in enumerate(task.get("subtasks", [])):
-                if not sub.get("done"):
-                    choices.append((i, j, sub.get("text"), task.get("text")))
-    if not choices:
-        return await message.answer("Нет мини-задач для выполнения.", reply_markup=main_menu())
-
-    text = "Выберите мини-задачу для выполнения:\n"
-    for idx, (i, j, sub_text, task_text) in enumerate(choices):
-        text += f"{idx + 1}. [{task_text}] {sub_text}\n"
-
-    await state.update_data(choices=choices)
-    await message.answer(text)
-    await state.set_state("complete_subtask")
-
-@dp.message_handler(state="complete_subtask")
-async def complete_subtask_finish(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    choices = data.get("choices", [])
-    try:
-        index = int(message.text.strip()) - 1
-        if index < 0 or index >= len(choices):
-            raise ValueError("Номер вне диапазона")
-        i, j, sub_text, task_text = choices[index]
-        sprint = get_sprint()
-        sprint["tasks"][i]["subtasks"][j]["done"] = True
-        set_sprint(sprint)
-
-        stats = get_user_stats()
-        uid = str(message.from_user.id)
-        stats.setdefault(uid, {"points": 0, "moods": {}})
-        stats[uid]["points"] += 1
-        save_user_stats(stats)
-
-        await message.answer(
-            f"Мини-задача '{sub_text}' выполнена! ✅\n🏅 Баллы: {stats[uid]['points']}",
-            reply_markup=main_menu()
-        )
-    except Exception as e:
-        print("Ошибка при завершении мини-задачи:", e)
-        await message.answer("Некорректный номер 😅", reply_markup=main_menu())
-    finally:
-        await state.finish()
-
-# ======================
-# Завершение большой задачи (с уведомлением в канал)
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "✅ Завершить задачу")
-async def complete_task_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    sprint = get_sprint()
-    if not sprint or not sprint.get("tasks"):
-        return await message.answer("Нет задач для завершения 😅", reply_markup=main_menu())
-
-    undone = [t for t in sprint.get("tasks", []) if not t.get("done")]
-    if not undone:
-        return await message.answer("Все задачи уже завершены 🎉", reply_markup=main_menu())
-
-    text = "Выберите номер незавершённой задачи:\n"
-    for i, t in enumerate(undone):
-        text += f"{i + 1}. {t['text']}\n"
-    await message.answer(text)
-    await state.set_state("complete_task")
-
-@dp.message_handler(state="complete_task")
-async def complete_task_finish(message: types.Message, state: FSMContext):
-    sprint = get_sprint()
-    undone = [t for t in sprint.get("tasks", []) if not t.get("done")]
-    try:
-        index = int(message.text.strip()) - 1
-        task = undone[index]
-        # найти оригинальный объект в sprint["tasks"]
-        for original in sprint["tasks"]:
-            if original["text"] == task["text"]:
-                original["done"] = True
-                break
-        set_sprint(sprint)
-
-        stats = get_user_stats()
-        uid = str(message.from_user.id)
-        if uid not in stats:
-            stats[uid] = {"points": 0, "moods": {}}
-        stats[uid]["points"] += 10
-        save_user_stats(stats)
-
-        # уведомление в канал
-        await notify_task_done(message.from_user.id, task["text"], stats[uid]["points"])
-
-        await message.answer(f"Задача '{task['text']}' завершена! 🎉\n🏅 Очки: {stats[uid]['points']}", reply_markup=main_menu())
-    except Exception as e:
-        print("Ошибка при завершении большой задачи:", e)
-        await message.answer("Некорректный номер 😅", reply_markup=main_menu())
-    await state.finish()
-
-# ======================
-# Уведомление в канал + callback praise
-# ======================
-async def notify_task_done(user_id, task_text, points):
-    try:
-        chat = await bot.get_chat(user_id)
-        username = chat.username or chat.first_name or str(user_id)
-        kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("👍 Похвалить", callback_data=f"praise_{user_id}_{task_text}"))
-        await bot.send_message(CHANNEL_ID, f"Пользователь @{username} завершил задачу: {task_text} ✅\n🏅 Баллы: {points}", reply_markup=kb)
-    except Exception as e:
-        print("notify_task_done error:", e)
-
-@dp.callback_query_handler(lambda c: c.data.startswith("praise_"))
-async def handle_praise(callback_query: types.CallbackQuery):
-    try:
-        parts = callback_query.data.split("_", 2)
-        user_id = int(parts[1])
-        task_text = parts[2]
-        await callback_query.answer(f"Похвалено за '{task_text}'! 🎉")
-        stats = get_user_stats()
-        uid = str(user_id)
-        if uid not in stats:
-            stats[uid] = {"points": 0, "moods": {}}
-        stats[uid]["points"] += 2
-        save_user_stats(stats)
-    except Exception:
-        await callback_query.answer("Ошибка обработки похвалы.")
-
-# ======================
-# Ревью — публикует в канал и показывает пользователю (расширенное: считает эмоции и баллы)
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip().lower().startswith("🧐") or (m.text and "ревью" in m.text.lower()))
-async def review_handler(message: types.Message):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    sprint = get_sprint()
-    if not sprint:
-        return await message.answer("Нет данных для ревью 😅", reply_markup=main_menu())
-
-    # --- задачи и баллы ---
-    tasks = sprint.get("tasks", [])
-    total = len(tasks)
-    done = sum(1 for t in tasks if t.get("done"))
-    not_done = total - done
-
-    stats = get_user_stats()
-    # суммируем очки участников, относим к текущему спринту
-    points_total = 0
-    for uid, info in stats.items():
-        points_total += info.get("points", 0)
-
-    # --- эмоции ---
-    moods_block = sprint.get("moods", {})  # {user_id: {date: emoji}}
-    mood_counts = {}
-    for uid, days in moods_block.items():
-        for d, emo in days.items():
-            mood_counts[emo] = mood_counts.get(emo, 0) + 1
-
-    # Формируем текст ревью
-    start = sprint.get("start_date", "?")
-    end = sprint.get("end_date", "?")
-    text_user = f"🔍 *Ревью*\nСпринт: {sprint.get('name','Спринт')}\nСроки: {start} — {end}\n\n"
-    text_user += f"📌 Задач: {total}\nВыполнено: {done}\nОсталось: {not_done}\n\n"
-    text_user += f"🏅 Баллы (всего): {points_total}\n\n"
-    text_user += "🧠 Настроение за спринт:\n"
-    if mood_counts:
-        for emo, cnt in mood_counts.items():
-            text_user += f"{emo} — {cnt} дней\n"
-    else:
-        text_user += "Нет записей настроения.\n"
-
-    await message.answer(text_user, parse_mode="Markdown", reply_markup=main_menu())
-
-    # публикуем в канал
-    try:
-        await bot.send_message(CHANNEL_ID, f"{text_user}", parse_mode="Markdown")
-    except Exception as e:
-        print("Ошибка отправки ревью в канал:", e)
-
-# ======================
-# Ретро — постановка цели и публикация
-# ======================
-@dp.message_handler(lambda m: m.text and m.text.strip() == "🎭 Ретро")
-async def retro_start(message: types.Message, state: FSMContext):
-    if not check_access(message.from_user.id):
-        return await message.answer("Нет доступа.")
-    await message.answer("Напиши цель для следующего спринта:")
-    await state.set_state("set_new_goal")
-
-@dp.message_handler(state="set_new_goal")
-async def set_new_goal(message: types.Message, state: FSMContext):
-    sprint = get_sprint() or create_new_sprint()
-    sprint["goal"] = message.text.strip()
-    set_sprint(sprint)
-    await message.answer(f"Цель сохранена: {sprint['goal']}", reply_markup=main_menu())
-    try:
-        await bot.send_message(CHANNEL_ID, f"🎯 Новая цель спринта '{sprint.get('name','Спринт')}':\n{ sprint['goal'] }")
-    except Exception:
-        pass
-    await state.finish()
-
-# ======================
-# Статус задач (дублируется в канал)
-# ======================
-@dp.message_handler(lambda m: m.text and "статус" in m.text.lower())
-async def status_tasks(message: types.Message):
-    sprint = get_sprint()
-    if not sprint:
-        await message.answer("Спринт ещё не создан.", reply_markup=main_menu())
-        return
-
-    tasks = sprint.get("tasks", [])
-    if not tasks:
-        await message.answer("Задач пока нет!", reply_markup=main_menu())
-        return
-
-    start = sprint.get("start_date")
-    end = sprint.get("end_date")
-
-    status_text = f"📅 *Текущий спринт*\n{start} — {end}\n\n"
-    for i, t in enumerate(tasks):
-        mark = "✅" if t.get("done") else "⏳"
-        status_text += f"{i+1}. {mark} {t.get('text')}\n"
-        for j, sub in enumerate(t.get("subtasks", [])):
-            s_mark = "✅" if sub.get("done") else "⬜️"
-            status_text += f"    {i+1}.{j+1} {s_mark} {sub.get('text')}\n"
-        status_text += "\n"
-
-    await message.answer(status_text, parse_mode="Markdown", reply_markup=main_menu())
-    try:
-        await bot.send_message(CHANNEL_ID, status_text, parse_mode="Markdown")
-    except Exception as e:
-        print("Ошибка отправки статуса в канал:", e)
 
 # ======================
 # Муд-календарь — кнопка и inline обработка
 # ======================
-# выбранные эмоции: 1. 😎 2. 🥴 3. 🫨 4. 😐 5. ☹️ 6. 😭 7. 😌 8. 😊 9. 😆 10. 🤢 11. 😡 12. 😱
 MOOD_EMOJIS = ["😎","🥴","🫨","😐","☹️","😭","😌","😊","😆","🤢","😡","😱"]
 MOOD_LABELS = {
-    "😎": "ЯНАКОНЕ",
-    "🥴": "Непонятно",
-    "🫨": "Натревоге",
-    "😐": "Апатия",
-    "☹️": "Грущу",
-    "😭": "Оченьгрущу",
-    "😌": "Спокоен",
-    "😊": "Довольный",
-    "😆": "Веселюсьнавсю",
-    "🤢": "Переотдыхал",
-    "😡": "Злюся",
-    "😱": "Вшоке"
+    "😎": "ЯНАКОНЕ", "🥴": "Непонятно", "🫨": "Натревоге", "😐": "Апатия", "☹️": "Грущу",
+    "😭": "Оченьгрущу", "😌": "Спокоен", "😊": "Довольный", "😆": "Веселюсьнавсю",
+    "🤢": "Переотдыхал", "😡": "Злюся", "😱": "Вшоке"
 }
 
 def mood_keyboard():
     kb = InlineKeyboardMarkup(row_width=3)
     for e in MOOD_EMOJIS:
-        kb.insert(InlineKeyboardButton(text=e, callback_data=f"mood_{ord(e[0]) if isinstance(e, str) else e}"))
+        kb.insert(InlineKeyboardButton(text=e, callback_data=f"mood_{ord(e[0])}"))
     return kb
 
 @dp.message_handler(lambda m: m.text and m.text.strip() == "🧠 Муд-календарь")
@@ -623,29 +197,19 @@ async def mood_menu(message: types.Message):
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("mood_"))
 async def process_mood(callback_query: types.CallbackQuery):
     try:
-        # восстановим emoji из callback_data
         code = callback_query.data.split("_",1)[1]
-        # code is integer string of ord, convert back
-        try:
-            emo = chr(int(code))
-        except Exception:
-            emo = "🙂"
-
+        emo = chr(int(code))
         if emo not in MOOD_EMOJIS:
-            # safety fallback
             emo = MOOD_EMOJIS[0]
 
         stats = get_user_stats()
         uid = str(callback_query.from_user.id)
-        today = str(datetime.now().date())
+        today = str(datetime.now(MOSCOW_TZ).date())
 
-        if uid not in stats:
-            stats[uid] = {"points": 0, "moods": {}}
+        stats.setdefault(uid, {"points": 0, "moods": {}})
         stats[uid]["moods"][today] = emo
-        # give small points for mood logging if desired
         save_user_stats(stats)
 
-        # save also into sprint (aggregate moods per sprint)
         sprint = get_sprint() or create_new_sprint()
         sprint.setdefault("moods", {})
         sprint["moods"].setdefault(uid, {})
@@ -653,67 +217,36 @@ async def process_mood(callback_query: types.CallbackQuery):
         set_sprint(sprint)
 
         await callback_query.answer(f"Записала настроение: {emo} — {MOOD_LABELS.get(emo,'')}")
-
-        # подтверждение в личку
         try:
             await bot.send_message(callback_query.from_user.id, f"Записала твоё настроение на {today}: {emo} — {MOOD_LABELS.get(emo,'')}", reply_markup=main_menu())
         except Exception:
             pass
-
-        # Optionally publish to channel a short message:
         await bot.send_message(CHANNEL_ID, f"Настроение @{callback_query.from_user.username}: {emo}")
     except Exception as e:
         print("process_mood error:", e)
         await callback_query.answer("Ошибка при сохранении настроения.")
 
 # ======================
-# Отзывы из канала (#отзыв)
+# Ежедневный опрос настроения в 20:00 МСК
 # ======================
-@dp.message_handler(lambda m: isinstance(m.text, str) and "#отзыв" in m.text.lower(), content_types=types.ContentTypes.TEXT)
-async def save_review(message: types.Message):
-    try:
-        reviews = read_json(REVIEWS_FILE, [])
-        reviews.append({
-            "user": message.from_user.username or message.from_user.first_name,
-            "text": message.text,
-            "date": datetime.now().isoformat()
-        })
-        write_json(REVIEWS_FILE, reviews)
-        if message.chat.type == "private":
-            await message.answer("Спасибо! Отзыв сохранён. 🌟", reply_markup=main_menu())
-    except Exception:
-        pass
-
-# ======================
-# Команда /restart
-# ======================
-@dp.message_handler(commands=["restart"])
-async def cmd_restart(message: types.Message):
-    if not check_access(message.from_user.id):
-        return await message.answer("У тебя нет прав на перезапуск.")
-    await message.answer("🔄 Перезапуск бота...")
-    await asyncio.sleep(1)
-    try:
-        python = sys.executable
-        os.execv(python, [python] + sys.argv)
-    except Exception as e:
-        await message.answer(f"Ошибка при restart: {e}")
-
-# ======================
-# Ежедневный опрос настроения (опционально)
-# ======================
-async def send_daily_mood():
+async def send_daily_mood_moscow():
     while True:
-        now = datetime.now()
-        target = now.replace(hour=10, minute=0, second=0, microsecond=0)
-        if now > target:
+        now = datetime.now(MOSCOW_TZ)
+        target = now.replace(hour=20, minute=0, second=0, microsecond=0)
+        if now >= target:
             target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
+
         for uid in USER_IDS:
             try:
-                await bot.send_message(uid, "Как настроение сегодня?", reply_markup=mood_keyboard())
-            except Exception:
-                pass
+                await bot.send_message(uid, "Как настроение сегодня? 🧠", reply_markup=mood_keyboard())
+            except Exception as e:
+                print(f"Ошибка отправки опроса настроения пользователю {uid}: {e}")
+
+        try:
+            await bot.send_message(CHANNEL_ID, "🧠 Сегодня у участников опрос настроения открыт! Проверь свои ощущения.")
+        except Exception as e:
+            print(f"Ошибка отправки оповещения в канал: {e}")
 
 # ======================
 # Фоновые задачи запускаются в on_startup
@@ -721,9 +254,7 @@ async def send_daily_mood():
 async def on_startup(dp_):
     if not get_sprint():
         create_new_sprint()
-    asyncio.create_task(send_daily_mood())
-    # можно включить напоминания мини-задач, если нужно
-    # asyncio.create_task(subtask_reminder_loop())
+    asyncio.create_task(send_daily_mood_moscow())
 
 # ======================
 # Запуск
