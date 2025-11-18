@@ -1,5 +1,5 @@
 services:
-  - type: web
-    name: bot
-    env: python
-    pythonVersion: 3.11
+pytz==2025.2
+pydantic==2.5.2
+aiohttp==3.8.6
+typing_extensions==4.7.1
