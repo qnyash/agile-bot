@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: agile-bot
-    env: python
-    pythonVersion: 3.11  # это точно работает с aiohttp и aiogram
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: python bot.py
