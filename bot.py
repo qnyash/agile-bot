@@ -17,7 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 # ======================
 ALLOWED_USERS = [466924747, 473956283]
 USER_IDS = [466924747, 473956283]
-TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
+TOKEN = "8155844970:AAHS8dWJmDeFVfOgPscCEQdHqFrbGSG3Mss"
 CHANNEL_ID = -1003457894028
 
 BASE = Path(".")
@@ -117,3 +117,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
