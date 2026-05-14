@@ -767,10 +767,13 @@ async def health(request):
 async def on_startup(app):
     if not get_sprint():
         create_new_sprint()
+    print("Cleaning old webhook...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("Webhook cleaned, starting tasks...")
     asyncio.create_task(auto_press_invisible_button())
     asyncio.create_task(send_horoscope(bot))
     asyncio.create_task(send_daily_mood_msk())
-    asyncio.create_task(dp.start_polling(bot, skip_updates=True))
+    asyncio.create_task(dp.start_polling(bot))
     print("Bot polling started")
 
 app = web.Application()
