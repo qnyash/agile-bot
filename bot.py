@@ -759,28 +759,52 @@ async def auto_press_invisible_button():
             await asyncio.sleep(60)
 
 # ======================
-# AIOHTTP сервер (для Render Web Service)
+# AIOHTTP сервер + запуск бота (Render Web Service)
 # ======================
 async def health(request):
     return web.Response(text="Bot OK")
 
-async def on_startup(app):
-    if not get_sprint():
-        create_new_sprint()
-    print("Cleaning old webhook...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("Webhook cleaned, starting tasks...")
-    asyncio.create_task(auto_press_invisible_button())
-    asyncio.create_task(send_horoscope(bot))
-    asyncio.create_task(send_daily_mood_msk())
-    asyncio.create_task(dp.start_polling(bot))
-    print("Bot polling started")
+async def bot_runner():
+    """Фоновая задача: запускает бота и перезапускает при падении"""
+    while True:
+        try:
+            print("Cleaning webhook...")
+            await bot.delete_webhook(drop_pending_updates=True)
+            print("Webhook cleaned")
+            
+            if not get_sprint():
+                create_new_sprint()
+            
+            asyncio.create_task(auto_press_invisible_button())
+            asyncio.create_task(send_horoscope(bot))
+            asyncio.create_task(send_daily_mood_msk())
+            
+            print("Starting polling...")
+            await dp.start_polling(bot)
+        except Exception as e:
+            print(f"Bot error: {e}, restarting in 10s...")
+            await asyncio.sleep(10)
 
-app = web.Application()
-app.router.add_get('/', health)
-app.router.add_get('/health', health)
-app.on_startup.append(on_startup)
+async def main():
+    # 1. Создаём веб-приложение
+    app = web.Application()
+    app.router.add_get('/', health)
+    app.router.add_get('/health', health)
+    
+    # 2. Запускаем сервер (Render увидит порт сразу)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Server started on port {port}")
+    
+    # 3. Запускаем бота в фоне
+    asyncio.create_task(bot_runner())
+    
+    # 4. Держим процесс живым бесконечно
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    web.run_app(app, host="0.0.0.0", port=port)
+    asyncio.run(main())
