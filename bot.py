@@ -1,4 +1,4 @@
-# bot.py — aiogram 3.x, Render-ready, весь ваш функционал
+# bot.py — aiogram 3.x, Render-ready, максимальное логирование
 import os
 import sys
 import json
@@ -14,13 +14,13 @@ from aiogram.types import (
     Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 )
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # ======================
-# Конфиг из переменных окружения (Render подставит сам)
+# Конфиг
 # ======================
 TOKEN         = os.getenv("BOT_TOKEN", "")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
@@ -28,13 +28,17 @@ ALLOWED_STR   = os.getenv("ALLOWED_USERS", "466924747,473956283")
 ALLOWED_USERS = [int(x.strip()) for x in ALLOWED_STR.split(",") if x.strip()]
 USER_IDS      = ALLOWED_USERS.copy()
 
+print(f"[INIT] TOKEN loaded: {'YES' if TOKEN else 'NO'}")
+print(f"[INIT] CHANNEL_ID: {CHANNEL_ID}")
+print(f"[INIT] ALLOWED_USERS: {ALLOWED_USERS}")
+
 if not TOKEN:
     print("ERROR: BOT_TOKEN не задан!"); sys.exit(1)
 if CHANNEL_ID == 0:
     print("ERROR: CHANNEL_ID не задан!"); sys.exit(1)
 
 # ======================
-# Файлы хранения
+# Файлы
 # ======================
 BASE            = Path(".")
 SPRINT_FILE     = BASE / "sprint.json"
@@ -44,14 +48,14 @@ REVIEWS_FILE    = BASE / "reviews.json"
 MINI_TASKS_FILE = BASE / "mini_tasks.json"
 
 # ======================
-# Инициализация aiogram 3
+# Бот и диспетчер
 # ======================
 bot     = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp      = Dispatcher(storage=storage)
 
 # ======================
-# Состояния FSM
+# Состояния
 # ======================
 class Form(StatesGroup):
     add_task           = State()
@@ -182,7 +186,9 @@ def write_json(path: Path, data):
         print("write_json error:", e)
 
 def check_access(user_id: int) -> bool:
-    return user_id in ALLOWED_USERS
+    ok = user_id in ALLOWED_USERS
+    print(f"[ACCESS] user={user_id}, allowed={ok}")
+    return ok
 
 # ======================
 # Спринт / история / статистика
@@ -285,8 +291,11 @@ def mood_keyboard():
 # ======================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    print(f"[START] Called by user_id={message.from_user.id}, username={message.from_user.username}")
     if not check_access(message.from_user.id):
+        print("[START] Access denied")
         return await message.answer("У тебя нет доступа к этому боту.")
+    print("[START] Access granted, sending welcome")
     caption  = "Привет! 👋 Я — ваш agile-бот для душевных апгрейдов. Нажимай кнопки ниже и поехали!"
     img_path = BASE / "welcome.jpg"
     try:
@@ -294,7 +303,8 @@ async def cmd_start(message: Message):
             await bot.send_photo(message.chat.id, photo=FSInputFile(img_path), caption=caption, reply_markup=main_menu())
         else:
             await message.answer(caption, reply_markup=main_menu())
-    except Exception:
+    except Exception as e:
+        print(f"[START] Error sending welcome: {e}")
         await message.answer(caption, reply_markup=main_menu())
 
 # ----- Добавить задачу -----
@@ -759,7 +769,7 @@ async def auto_press_invisible_button():
             await asyncio.sleep(60)
 
 # ======================
-# AIOHTTP сервер (для Render Web Service)
+# AIOHTTP сервер + запуск бота
 # ======================
 async def health(request):
     return web.Response(text="Bot OK")
@@ -767,9 +777,9 @@ async def health(request):
 async def bot_background():
     """Фоновая задача: запускает бота после старта сервера"""
     try:
-        print("Cleaning webhook...")
+        print("[BOT] Cleaning webhook...")
         await bot.delete_webhook(drop_pending_updates=True)
-        print("Webhook cleaned")
+        print("[BOT] Webhook deleted successfully")
         
         if not get_sprint():
             create_new_sprint()
@@ -778,14 +788,15 @@ async def bot_background():
         asyncio.create_task(send_horoscope(bot))
         asyncio.create_task(send_daily_mood_msk())
         
-        print("Starting polling...")
+        print("[BOT] Starting polling...")
         await dp.start_polling(bot)
     except Exception as e:
-        print(f"Bot polling error: {e}")
+        print(f"[BOT] Polling error: {e}")
         await asyncio.sleep(60)
 
 async def on_startup(app):
     """Хук aiohttp: вызывается ПОСЛЕ старта сервера"""
+    print("[SERVER] on_startup called")
     asyncio.create_task(bot_background())
 
 app = web.Application()
@@ -795,4 +806,5 @@ app.on_startup.append(on_startup)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
+    print(f"[MAIN] Starting web server on port {port}")
     web.run_app(app, host="0.0.0.0", port=port)
