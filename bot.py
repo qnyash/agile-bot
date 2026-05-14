@@ -1,4 +1,4 @@
-# bot.py — aiogram 3.x, Render-ready, максимальное логирование
+# bot.py — aiogram 3.x, Render-ready, прерывание ввода по кнопкам меню
 import os
 import sys
 import json
@@ -66,6 +66,46 @@ class Form(StatesGroup):
     sprint_start_date  = State()
     sprint_end_date    = State()
     set_new_goal       = State()
+
+# ======================
+# Список кнопок меню (для прерывания ввода)
+# ======================
+MENU_BUTTONS = [
+    "➕ Добавить задачу", "✅ Завершить задачу",
+    "🗑 Удалить задачу", "📋 Статус задач",
+    "🔄 Новый спринт",
+    "🧐 Итоги", "🎭 Планы",
+    "➕ Мини-задача", "✅ Выполнить мини-задачу",
+    "🧠 Муд-календарь",
+]
+
+async def handle_menu_interrupt(message: Message, state: FSMContext):
+    """Если пользователь нажал кнопку меню во время ввода — прерываем текущее состояние"""
+    text = message.text
+    await state.clear()
+    print(f"[INTERRUPT] State cleared, routing to {text}")
+    
+    if text == "➕ Добавить задачу":
+        return await add_task_start(message, state)
+    elif text == "✅ Завершить задачу":
+        return await complete_task_start(message, state)
+    elif text == "🗑 Удалить задачу":
+        return await delete_task_start(message, state)
+    elif text == "📋 Статус задач":
+        return await status_tasks(message)
+    elif text == "🔄 Новый спринт":
+        return await new_sprint_start(message, state)
+    elif text == "🧐 Итоги":
+        return await review_handler(message)
+    elif text == "🎭 Планы":
+        return await retro_start(message, state)
+    elif text == "➕ Мини-задача":
+        return await add_mini_task_start(message, state)
+    elif text == "✅ Выполнить мини-задачу":
+        return await complete_mini_task_start(message, state)
+    elif text == "🧠 Муд-календарь":
+        return await mood_menu(message)
+    return None
 
 # ======================
 # Гороскоп
@@ -290,12 +330,13 @@ def mood_keyboard():
 # Хендлеры
 # ======================
 @dp.message(Command("start"))
-async def cmd_start(message: Message):
-    print(f"[START] Called by user_id={message.from_user.id}, username={message.from_user.username}")
+async def cmd_start(message: Message, state: FSMContext):
+    print(f"[START] Called by user_id={message.from_user.id}")
     if not check_access(message.from_user.id):
         print("[START] Access denied")
         return await message.answer("У тебя нет доступа к этому боту.")
-    print("[START] Access granted, sending welcome")
+    await state.clear()
+    print("[START] Access granted, state cleared")
     caption  = "Привет! 👋 Я — ваш agile-бот для душевных апгрейдов. Нажимай кнопки ниже и поехали!"
     img_path = BASE / "welcome.jpg"
     try:
@@ -303,8 +344,7 @@ async def cmd_start(message: Message):
             await bot.send_photo(message.chat.id, photo=FSInputFile(img_path), caption=caption, reply_markup=main_menu())
         else:
             await message.answer(caption, reply_markup=main_menu())
-    except Exception as e:
-        print(f"[START] Error sending welcome: {e}")
+    except Exception:
         await message.answer(caption, reply_markup=main_menu())
 
 # ----- Добавить задачу -----
@@ -317,6 +357,8 @@ async def add_task_start(message: Message, state: FSMContext):
 
 @dp.message(Form.add_task)
 async def add_task_finish(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     sprint = get_sprint() or create_new_sprint()
     sprint.setdefault("tasks", [])
     sprint["tasks"].append({
@@ -345,6 +387,8 @@ async def delete_task_start(message: Message, state: FSMContext):
 
 @dp.message(Form.delete_task)
 async def delete_task_finish(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     sprint = get_sprint() or {}
     try:
         idx     = int(message.text.strip()) - 1
@@ -365,6 +409,8 @@ async def new_sprint_start(message: Message, state: FSMContext):
 
 @dp.message(Form.sprint_start_date)
 async def new_sprint_start_date(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     date_str = message.text.strip()
     try:
         start = datetime.now().date() if date_str.lower() in ("сейчас", "now", "today", "") else datetime.strptime(date_str, "%d.%m.%Y").date()
@@ -376,6 +422,8 @@ async def new_sprint_start_date(message: Message, state: FSMContext):
 
 @dp.message(Form.sprint_end_date)
 async def new_sprint_end_date(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     data       = await state.get_data()
     start_date = datetime.fromisoformat(data["start_date"]).date()
     end_text   = message.text.strip()
@@ -408,6 +456,8 @@ async def add_mini_task_start(message: Message, state: FSMContext):
 
 @dp.message(Form.add_mini_task)
 async def add_mini_task_finish(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     try:
         text = message.text.strip()
         if not text:
@@ -446,6 +496,8 @@ async def complete_mini_task_start(message: Message, state: FSMContext):
 
 @dp.message(Form.complete_mini_task)
 async def complete_mini_task_finish(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     data    = await state.get_data()
     choices = data.get("choices", [])
     try:
@@ -507,6 +559,8 @@ async def complete_task_start(message: Message, state: FSMContext):
 
 @dp.message(Form.complete_task)
 async def complete_task_finish(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     sprint = get_sprint()
     undone = [t for t in sprint["tasks"] if not t.get("done")]
     try:
@@ -619,6 +673,8 @@ async def retro_start(message: Message, state: FSMContext):
 
 @dp.message(Form.set_new_goal)
 async def set_new_goal(message: Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        return await handle_menu_interrupt(message, state)
     sprint = get_sprint() or create_new_sprint()
     sprint["goal"] = message.text.strip()
     set_sprint(sprint)
